@@ -1,6 +1,7 @@
 package com.reactlibrary;
 
 
+import com.braintreepayments.api.interfaces.BraintreeListener;
 import com.loopj.android.http.*;
 import com.braintreepayments.api.PayPal;
 import cz.msebera.android.httpclient.Header;
@@ -25,6 +26,7 @@ import java.util.List;
 import java.util.Arrays;
 import android.app.Activity;
 import java.util.Collections;
+import android.util.Log;
 
 import com.facebook.react.bridge.Promise;
 import com.facebook.react.bridge.Callback;
@@ -36,8 +38,7 @@ import com.facebook.react.bridge.ReactApplicationContext;
 import com.facebook.react.bridge.ReactContextBaseJavaModule;
 import com.facebook.react.bridge.JSApplicationIllegalArgumentException;
 
-public class RNPaypalWrapperModule extends ReactContextBaseJavaModule implements
-        PaymentMethodNonceCreatedListener, BraintreeErrorListener, BraintreeCancelListener {
+public class RNPaypalWrapperModule extends ReactContextBaseJavaModule {
 
   private String tokenUrl;
   private Promise callback;
@@ -64,8 +65,66 @@ public class RNPaypalWrapperModule extends ReactContextBaseJavaModule implements
       public void onSuccess(int statusCode, Header[] headers, String clientToken) {
         try {
           mBraintreeFragment = BraintreeFragment.newInstance(getCurrentActivity(), clientToken);
+
+          mBraintreeFragment.addListener(new PaymentMethodNonceCreatedListener() {
+            public void onPaymentMethodNonceCreated(PaymentMethodNonce paymentMethodNonce) {
+              String nonce = paymentMethodNonce.getNonce();
+              if (paymentMethodNonce instanceof PayPalAccountNonce) {
+                PayPalAccountNonce payPalAccountNonce = (PayPalAccountNonce)paymentMethodNonce;
+
+                String email = payPalAccountNonce.getEmail();
+                String firstName = payPalAccountNonce.getFirstName();
+                String lastName = payPalAccountNonce.getLastName();
+                String phone = payPalAccountNonce.getPhone();
+
+                PostalAddress billingAddress = payPalAccountNonce.getBillingAddress();
+                PostalAddress shippingAddress = payPalAccountNonce.getShippingAddress();
+
+                WritableMap params = Arguments.createMap();
+                params.putString("nonce", nonce);
+                params.putString("email", payPalAccountNonce.getEmail());
+                params.putString("phone", payPalAccountNonce.getPhone());
+                params.putString("lastName", payPalAccountNonce.getLastName());
+                params.putString("firstName", payPalAccountNonce.getFirstName());
+
+                callback.resolve(params);
+                callback = null;
+              } else {
+                callback.reject(new AssertionException("Something went wrong. Try again later."));
+                callback = null;
+              }
+            }
+          });
+
+          mBraintreeFragment.addListener(new BraintreeErrorListener() {
+            public void onError(Exception error) {
+              if (error instanceof ErrorWithResponse) {
+                ErrorWithResponse errorWithResponse = (ErrorWithResponse) error;
+                BraintreeError cardErrors = errorWithResponse.errorFor("creditCard");
+                if (cardErrors != null) {
+                  BraintreeError expirationMonthError = cardErrors.errorFor("expirationMonth");
+                  if (expirationMonthError != null) {
+                    callback.reject(new JSApplicationIllegalArgumentException("Issue with expiration month."));
+                  } else {
+                    callback.reject(new JSApplicationIllegalArgumentException("Issue with credit card."));
+                  }
+                }
+              }
+              callback.reject(new AssertionException("Something went wrong. Try again later"));
+              callback = null;
+            }
+          });
+
+          mBraintreeFragment.addListener(new BraintreeCancelListener() {
+            public void onCancel(int requestCode) {
+              callback.reject(new AssertionException("User cancelled."));
+              callback = null;
+            }
+          });
+
           clientToken = clientToken;
-          startCheckout(amount);
+          PayPalRequest request = new PayPalRequest(amount).currencyCode("GBP").intent(PayPalRequest.INTENT_AUTHORIZE);
+          PayPal.requestOneTimePayment(mBraintreeFragment, request);
         } catch (InvalidArgumentException e) {
           callback.reject(new JSApplicationIllegalArgumentException("Something went wrong. Check amount or try again later."));
           callback = null;
@@ -80,67 +139,9 @@ public class RNPaypalWrapperModule extends ReactContextBaseJavaModule implements
     });
   }
 
-  public void startCheckout(String amount) {
-    PayPalRequest request = new PayPalRequest(amount).currencyCode("GBP").intent(PayPalRequest.INTENT_AUTHORIZE);
-    PayPal.requestOneTimePayment(mBraintreeFragment, request);
-  }
-
-  @Override
-  public void onPaymentMethodNonceCreated(PaymentMethodNonce paymentMethodNonce) {
-    String nonce = paymentMethodNonce.getNonce();
-    if (paymentMethodNonce instanceof PayPalAccountNonce) {
-      PayPalAccountNonce payPalAccountNonce = (PayPalAccountNonce)paymentMethodNonce;
-
-      String email = payPalAccountNonce.getEmail();
-      String firstName = payPalAccountNonce.getFirstName();
-      String lastName = payPalAccountNonce.getLastName();
-      String phone = payPalAccountNonce.getPhone();
-
-      PostalAddress billingAddress = payPalAccountNonce.getBillingAddress();
-      PostalAddress shippingAddress = payPalAccountNonce.getShippingAddress();
-
-      WritableMap params = Arguments.createMap();
-      params.putString("email", payPalAccountNonce.getEmail());
-      params.putString("phone", payPalAccountNonce.getPhone());
-      params.putString("lastName", payPalAccountNonce.getLastName());
-      params.putString("firstName", payPalAccountNonce.getFirstName());
-
-      callback.resolve(params);
-      callback = null;
-    } else {
-      callback.reject(new AssertionException("Something went wrong. Try again later."));
-      callback = null;
-    }
-  }
-
-  @Override
-  public void onCancel(int requestCode) {
-    callback.reject(new AssertionException("User cancelled."));
-    callback = null;
-  }
-
-  @Override
-  public void onError(Exception error) {
-    if (error instanceof ErrorWithResponse) {
-      ErrorWithResponse errorWithResponse = (ErrorWithResponse) error;
-      BraintreeError cardErrors = errorWithResponse.errorFor("creditCard");
-      if (cardErrors != null) {
-        BraintreeError expirationMonthError = cardErrors.errorFor("expirationMonth");
-        if (expirationMonthError != null) {
-          callback.reject(new JSApplicationIllegalArgumentException("Issue with expiration month."));
-        } else {
-          callback.reject(new JSApplicationIllegalArgumentException("Issue with credit card."));
-        }
-      }
-    }
-    callback.reject(new AssertionException("Something went wrong. Try again later"));
-    callback = null;
-  }
-
   @Override
   public String getName() {
     return "RNPaypalWrapper";
   }
-
 
 }
