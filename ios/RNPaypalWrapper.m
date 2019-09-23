@@ -51,8 +51,7 @@ RCT_EXPORT_METHOD(createPayment: (NSString *)amount
     BTPayPalDriver *payPalDriver = [[BTPayPalDriver alloc] initWithAPIClient:self.braintreeClient];
     payPalDriver.viewControllerPresentingDelegate = self;
 
-    BTPayPalRequest *request= [[BTPayPalRequest alloc] initWithAmount:@"2.32"];
-    request.currencyCode = @"GBP";
+    BTPayPalRequest *request= [[BTPayPalRequest alloc] initWithAmount: amount];
 
     [payPalDriver requestOneTimePayment:request completion:^(BTPayPalAccountNonce * _Nullable tokenizedPayPalAccount, NSError * _Nullable error) {
         if (tokenizedPayPalAccount) {
